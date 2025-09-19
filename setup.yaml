@@ -1,0 +1,44 @@
+#!/bin/bash
+echo "🚀 Setting up Complete DevOps Environment with Kind"
+
+# Install Kind
+echo "📦 Installing Kind..."
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin/kind
+
+# Create Kind cluster
+echo "🎯 Creating Kind cluster..."
+cat > kind-config.yaml << 'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: devops-project
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 30080
+    hostPort: 30080
+  - containerPort: 30443
+    hostPort: 30443
+- role: worker
+EOF
+
+kind create cluster --config=kind-config.yaml
+
+# Install ArgoCD
+echo "🔄 Installing ArgoCD..."
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=available --timeout=600s deployment/argocd-server -n argocd
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "NodePort", "ports": [{"port": 443, "targetPort": 8080, "nodePort": 30443}]}}'
+
+# Get access information
+PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
+ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+
+echo "✅ Setup Complete!"
+echo "🌐 Cluster: kind-devops-project"
+echo "🌐 ArgoCD URL: https://$PUBLIC_IP:30443"
+echo "👤 Username: admin"
+echo "🔑 Password: $ARGOCD_PASSWORD"
+echo "🚀 Your app will be available at: http://$PUBLIC_IP:30080"
