@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/yourusername/nginx-devops-project.git
+    repoURL: https://github.com/YashJetani/kind-k8s-deployment.git
     targetRevision: main
     path: k8s
   destination:
