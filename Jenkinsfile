@@ -3,9 +3,9 @@ pipeline {
     
     environment {
         DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
-        DOCKER_IMAGE_NAME = 'yourdockerhubusername/nginx-devops'
+        DOCKER_IMAGE_NAME = 'yashjetani1408/nginx-devops'
         DOCKER_TAG = "${BUILD_NUMBER}"
-        GITHUB_CREDENTIALS = credentials('github-credentials')
+        KIND_CLUSTER = 'devops-project'
     }
     
     stages {
@@ -20,21 +20,21 @@ pipeline {
             steps {
                 script {
                     echo "Building Docker image: ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}"
-                    docker.build("${DOCKER_IMAGE_NAME}:${DOCKER_TAG}")
-                    docker.build("${DOCKER_IMAGE_NAME}:latest")
+                    sh """
+                        docker build -t ${DOCKER_IMAGE_NAME}:${DOCKER_TAG} .
+                        docker build -t ${DOCKER_IMAGE_NAME}:latest .
+                    """
                 }
             }
         }
         
-        stage('Test Docker Image') {
+        stage('Load Image to Kind') {
             steps {
                 script {
-                    echo "Testing Docker image..."
+                    echo "Loading image to Kind cluster..."
                     sh """
-                        docker run --rm -d --name nginx-test -p 8081:80 ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}
-                        sleep 10
-                        curl -f http://localhost:8081/health || exit 1
-                        docker stop nginx-test
+                        kind load docker-image ${DOCKER_IMAGE_NAME}:${DOCKER_TAG} --name ${KIND_CLUSTER}
+                        kind load docker-image ${DOCKER_IMAGE_NAME}:latest --name ${KIND_CLUSTER}
                     """
                 }
             }
@@ -44,9 +44,12 @@ pipeline {
             steps {
                 script {
                     echo "Pushing image to Docker Hub..."
-                    docker.withRegistry('https://index.docker.io/v1/', 'docker-hub-credentials') {
-                        docker.image("${DOCKER_IMAGE_NAME}:${DOCKER_TAG}").push()
-                        docker.image("${DOCKER_IMAGE_NAME}:latest").push()
+                    withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                        sh """
+                            echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin
+                            docker push ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}
+                            docker push ${DOCKER_IMAGE_NAME}:latest
+                        """
                     }
                 }
             }
@@ -58,8 +61,14 @@ pipeline {
                     echo "Updating Kubernetes deployment manifest..."
                     sh """
                         sed -i 's|image: ${DOCKER_IMAGE_NAME}:.*|image: ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}|' k8s/deployment.yaml
+                        
+                        # Ensure ImagePullPolicy is Never for Kind
+                        if ! grep -q "imagePullPolicy: Never" k8s/deployment.yaml; then
+                            sed -i '/image: ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}/a\\        imagePullPolicy: Never' k8s/deployment.yaml
+                        fi
+                        
                         git config user.name "Jenkins"
-                        git config user.email "jenkins@yourdomain.com"
+                        git config user.email "jenkins@example.com"
                         git add k8s/deployment.yaml
                         git commit -m "Update image tag to ${DOCKER_TAG}" || exit 0
                         git push origin HEAD:main
@@ -68,14 +77,17 @@ pipeline {
             }
         }
         
-        stage('Trigger ArgoCD Sync') {
+        stage('Deploy to Kind') {
             steps {
                 script {
-                    echo "Triggering ArgoCD synchronization..."
-                    // ArgoCD will automatically detect changes and deploy
+                    echo "Deploying to Kind cluster..."
                     sh """
-                        echo "ArgoCD will automatically sync the changes within 3 minutes"
-                        echo "Or you can manually sync via ArgoCD UI"
+                        kubectl apply -f k8s/namespace.yaml
+                        kubectl apply -f k8s/deployment.yaml
+                        kubectl apply -f k8s/service.yaml
+                        
+                        # Wait for deployment
+                        kubectl rollout status deployment/nginx-deployment -n nginx-app --timeout=300s
                     """
                 }
             }
@@ -85,11 +97,20 @@ pipeline {
     post {
         always {
             echo "Cleaning up..."
-            sh 'docker system prune -f'
+            sh 'docker system prune -f || true'
         }
         success {
-            echo "Pipeline completed successfully!"
-            echo "New image: ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}"
+            script {
+                sh '''
+                    PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
+                    echo "=========================================="
+                    echo "Deployment Successful!"
+                    echo "Application URL: http://$PUBLIC_IP:30080"
+                    echo "ArgoCD URL: https://$PUBLIC_IP:30443"
+                    echo "New image: ''' + DOCKER_IMAGE_NAME + ''':''' + DOCKER_TAG + '''"
+                    echo "=========================================="
+                '''
+            }
         }
         failure {
             echo "Pipeline failed!"
