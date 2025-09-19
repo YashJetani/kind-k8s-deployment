@@ -7,7 +7,7 @@ metadata:
     app: nginx
     version: "1.0"
 spec:
-  replicas: 3
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -24,7 +24,8 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: yourdockerhubusername/nginx-devops:latest
+        image: yashjetani1408/nginx-devops:latest
+        imagePullPolicy: Never  # Important for Kind - use local images
         ports:
         - containerPort: 80
           protocol: TCP
@@ -37,25 +38,13 @@ spec:
             cpu: "100m"
         livenessProbe:
           httpGet:
-            path: /health
+            path: /
             port: 80
           initialDelaySeconds: 15
           periodSeconds: 20
         readinessProbe:
           httpGet:
-            path: /health
+            path: /
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 10
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1001
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: false
-          capabilities:
-            drop:
-            - ALL
-            add:
-            - NET_BIND_SERVICE
-      securityContext:
-        fsGroup: 1001
